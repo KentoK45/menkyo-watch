@@ -14,7 +14,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { book } from "./book.mjs";
 
 // calgetres (month calendar) is a cached snapshot that lags ~5 min; getres (per day) is live.
-// Use the calendar only to learn which dates exist, and getres for the actual counts.
+// Dates within LIVE_DAYS use getres; later dates use the calendar. Polling every date live
+// gets the client 403'd by the site's firewall once the deadline is weeks away.
 const API_BASE = "https://license-test-tokyo-prd-police-pref-api.tokyo-madoguchi-yoyaku.com";
 const BOOKING_URL = "https://license-test.tokyo-madoguchi-yoyaku.com/police-pref-tokyo/index.html?lang=ja";
 
@@ -37,6 +38,7 @@ if (!/^\d{8}$/.test(UNTIL)) {
   process.exit(1);
 }
 const INTERVAL_S = Number(argVal("--interval", "60"));
+const LIVE_DAYS = Number(argVal("--live-days", "7"));
 const ONCE = args.includes("--once");
 const AUTO_BOOK = args.includes("--book");
 const NTFY_TOPIC = process.env.NTFY_TOPIC;
@@ -91,40 +93,39 @@ const fetchDay = (place, yyyymmdd) =>
     body: JSON.stringify({ date: yyyymmdd, coursecode: COURSE_CODE, placecode: place }),
   });
 
-// Which dates each place has sessions on (from the cached calendar); refreshed every 30 min
-let dateCache = { at: 0, dates: {} };
-async function sessionDates(now) {
-  if (Date.now() - dateCache.at < 30 * 60_000) return dateCache.dates;
-  const dates = {};
-  for (const place of Object.keys(PLACES)) {
-    const set = new Set();
-    for (const ym of monthsBetween(now.date, UNTIL)) {
-      for (const s of await fetchMonth(place, ym)) if (s.date >= now.date && s.date <= UNTIL) set.add(s.date);
-      await sleep(300 + Math.random() * 500);
-    }
-    dates[place] = [...set].sort();
-  }
-  dateCache = { at: Date.now(), dates };
-  return dates;
+function addDays(ymd, n) {
+  const d = new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6) + n));
+  return d.toISOString().slice(0, 10).replaceAll("-", "");
 }
 
 // Returns Map key "place|date|start" → { place, date, start, end, label, remaining }
 async function snapshot() {
   const now = jstNow();
+  const liveUntil = addDays(now.date, LIVE_DAYS);
   const slots = new Map();
-  const dates = await sessionDates(now);
+  const put = (place, s) => {
+    if (s.date < now.date || s.date > UNTIL) return;
+    if (s.date === now.date && s.starttime <= now.time) return; // already started
+    const remaining = Math.max(0, Number(s.capacity) - Number(s.reservation));
+    slots.set(`${place}|${s.date}|${s.starttime}`, {
+      place, date: s.date, start: s.starttime, end: s.endtime,
+      label: s.displaytime, remaining,
+    });
+  };
   for (const place of Object.keys(PLACES)) {
-    for (const date of dates[place]) {
-      if (date < now.date) continue;
-      for (const s of await fetchDay(place, date)) {
-        if (s.date === now.date && s.starttime <= now.time) continue; // already started
-        const remaining = Math.max(0, Number(s.capacity) - Number(s.reservation));
-        slots.set(`${place}|${s.date}|${s.starttime}`, {
-          place, date: s.date, start: s.starttime, end: s.endtime,
-          label: s.displaytime, remaining,
-        });
+    // 1) calendar for every month in range: cheap, slightly stale, also tells us which dates exist
+    const liveDates = new Set();
+    for (const ym of monthsBetween(now.date, UNTIL)) {
+      for (const s of await fetchMonth(place, ym)) {
+        put(place, s);
+        if (s.date >= now.date && s.date <= UNTIL && s.date <= liveUntil) liveDates.add(s.date);
       }
-      await sleep(200 + Math.random() * 400); // be gentle between requests
+      await sleep(300 + Math.random() * 500);
+    }
+    // 2) live counts for the next LIVE_DAYS days override the calendar's
+    for (const date of [...liveDates].sort()) {
+      for (const s of await fetchDay(place, date)) put(place, s);
+      await sleep(300 + Math.random() * 500); // be gentle between requests
     }
   }
   return slots;

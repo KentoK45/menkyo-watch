@@ -76,6 +76,7 @@ If you'd rather just get notified and book yourself, run `node watch.mjs` (witho
 - **Your PC has to stay on and awake.** Go to Settings > System > Power and set Sleep to "Never" while it's running.
 - **If it says 空きを取り逃しました:** someone else got that slot first. That's normal, and the bot keeps watching.
 - **Never share your `me.json`.** It contains your personal details.
+- **If you see `HTTP 403` errors:** the site is temporarily blocking you for checking too often. Press Ctrl + C, wait about 30 minutes, then start it again. Don't lower `--interval`.
 
 ---
 
@@ -83,6 +84,7 @@ If you'd rather just get notified and book yourself, run `node watch.mjs` (witho
 
 - `--until 2026-11-30`: overrides the deadline in `me.json`
 - `--interval 60`: seconds between checks (default 60; please don't go much lower)
+- `--live-days 7`: how many days ahead get checked live (default 7). Later dates use the site's calendar, which can be up to ~5 minutes behind. Raising this a lot can get you blocked (HTTP 403).
 - Phone alerts: install the **ntfy** app and subscribe to a random topic name. Then start the bot with `set NTFY_TOPIC=your-topic && node watch.mjs --book`.
 - Test the booking steps without booking: `node book.mjs 270 2026-10-27 0800 --dry-run`. Place codes are 270 府中, 280 鮫洲, 250 江東. It stops before 予約を確定 and saves a screenshot.
 - Manual pre-fill bookmarklet: `node make-bookmarklet.mjs` writes `bookmarklet.txt`. Paste its contents as a bookmark's URL. On the booking site, click it on the 利用規約 page, then again on the next page, and it fills in your details. The bookmark contains your details, so don't share it.
